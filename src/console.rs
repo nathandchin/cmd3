@@ -25,7 +25,7 @@ pub trait Command {
 
     // A generic `ArgMatches` is the best we can do, so it's up to the
     // implementor to convert `args` to their desired type.
-    fn execute(&self, args: clap::ArgMatches) -> Result<(), &str>;
+    fn execute(&self, args: clap::ArgMatches, stdin: Option<&str>) -> Result<Option<String>, &str>;
 }
 
 pub struct Console<'a> {
@@ -45,29 +45,44 @@ impl<'a> Console<'a> {
                 },
             };
 
-            let tokens = shlex::split(&readline).ok_or(ConsoleError::LexingError(readline))?;
+            let commands = readline.split("|").collect::<Vec<_>>();
 
-            if tokens.is_empty() {
-                continue;
-            }
+            let mut previous_output = None;
+            let mut previous_output_buf;
+            for command in commands {
+                let tokens = shlex::split(command)
+                    .ok_or_else(|| ConsoleError::LexingError(command.to_string()))?;
 
-            if let Some(cmd) = self.commands.get(&tokens[0]) {
-                let matches = match cmd.get_parser().try_get_matches_from(&tokens) {
-                    Ok(matches) => matches,
-                    Err(e) => {
-                        eprintln!("{}", e);
-                        continue;
-                    }
-                };
-
-                if let Err(e) = cmd
-                    .execute(matches)
-                    .map_err(|_| ConsoleError::CommandError(cmd.get_name()))
-                {
-                    eprintln!("{}", e);
+                if tokens.is_empty() {
+                    continue;
                 }
-            } else {
-                eprintln!("Unrecognized command")
+
+                if let Some(cmd) = self.commands.get(&tokens[0]) {
+                    let matches = match cmd.get_parser().try_get_matches_from(&tokens) {
+                        Ok(matches) => matches,
+                        Err(e) => {
+                            eprintln!("{}", e);
+                            continue;
+                        }
+                    };
+
+                    let result = cmd.execute(matches, previous_output);
+
+                    match result {
+                        Ok(output) => {
+                            previous_output = match output {
+                                Some(s) => {
+                                    previous_output_buf = s;
+                                    Some(&previous_output_buf)
+                                }
+                                None => None,
+                            }
+                        }
+                        Err(e) => eprintln!("{}", e),
+                    }
+                } else {
+                    eprintln!("Unrecognized command")
+                }
             }
         }
     }
