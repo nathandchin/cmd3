@@ -43,8 +43,65 @@ impl Command for DirCommand {
     }
 }
 
+/// Write `arg`s separated by a single space and followed by a newline.
+#[derive(clap::Parser, Debug)]
+struct EchoArgs {
+    /// Arguments to write
+    arg: Vec<String>,
+}
+
+struct EchoCommand;
+
+impl Command for EchoCommand {
+    fn get_name(&self) -> String {
+        "echo".to_string()
+    }
+
+    fn get_parser(&self) -> clap::Command {
+        EchoArgs::command()
+    }
+
+    fn execute(
+        &self,
+        args: clap::ArgMatches,
+        _stdin: Option<&str>,
+    ) -> Result<Option<String>, &str> {
+        let args: EchoArgs = clap::FromArgMatches::from_arg_matches(&args).unwrap();
+        let mut output = args.arg.join(" ");
+        output.push('\n');
+        Ok(Some(output))
+    }
+}
+
+/// Uppercases stdin.
+#[derive(clap::Parser, Debug)]
+struct UpperArgs;
+
+struct UpperCommand;
+
+impl Command for UpperCommand {
+    fn get_name(&self) -> String {
+        "upper".to_string()
+    }
+
+    fn get_parser(&self) -> clap::Command {
+        UpperArgs::command()
+    }
+
+    fn execute(
+        &self,
+        _args: clap::ArgMatches,
+        stdin: Option<&str>,
+    ) -> Result<Option<String>, &str> {
+        Ok(Some(stdin.ok_or("Foo")?.to_uppercase()))
+    }
+}
+
 fn main() {
-    let mut console = Console::default().add_command(&DirCommand {});
+    let mut console = Console::default()
+        .add_command(&DirCommand {})
+        .add_command(&EchoCommand {})
+        .add_command(&UpperCommand {});
 
     if let Err(e) = console.cmd_loop() {
         eprintln!("{}", e);
