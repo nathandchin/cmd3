@@ -17,7 +17,15 @@ pub enum ConsoleError {
 
 pub trait Command {
     fn get_name(&self) -> String;
-    fn execute(&self, arguments: &[String]) -> Result<(), &str>;
+
+    // It would be nice to return a `dyn clap::FromArgMatches` or `dyn
+    // clap::Parser` here, but neither of those are `dyn` safe, so we settle for
+    // `clap::Command`
+    fn get_parser(&self) -> clap::Command;
+
+    // A generic `ArgMatches` is the best we can do, so it's up to the
+    // implementor to convert `args` to their desired type.
+    fn execute(&self, args: clap::ArgMatches) -> Result<(), &str>;
 }
 
 pub struct Console<'a> {
@@ -44,11 +52,23 @@ impl<'a> Console<'a> {
             }
 
             if let Some(cmd) = self.commands.get(&tokens[0]) {
-                cmd.execute(&tokens[1..])
-                    .map_err(|_| ConsoleError::CommandError(cmd.get_name()))?;
-            }
+                let matches = match cmd.get_parser().try_get_matches_from(&tokens) {
+                    Ok(matches) => matches,
+                    Err(e) => {
+                        eprintln!("{}", e);
+                        continue;
+                    }
+                };
 
-            dbg!(&tokens);
+                if let Err(e) = cmd
+                    .execute(matches)
+                    .map_err(|_| ConsoleError::CommandError(cmd.get_name()))
+                {
+                    eprintln!("{}", e);
+                }
+            } else {
+                eprintln!("Unrecognized command")
+            }
         }
     }
 
