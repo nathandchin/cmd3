@@ -11,6 +11,10 @@ pub enum ConsoleError {
     ReadlineError(ReadlineError),
     #[error("Error splitting string: {0}")]
     LexingError(String),
+    #[error("Error: empty command")]
+    EmptyCommandLineError,
+    #[error("Unrecognized command: `{0}`")]
+    UnrecognizedCommand(String),
     #[error("Error executing command: {0}")]
     CommandError(String),
 }
@@ -36,7 +40,7 @@ pub struct Console<'a> {
 impl<'a> Console<'a> {
     pub fn cmd_loop(&mut self) -> Result<(), ConsoleError> {
         let mut rl = rustyline::DefaultEditor::new()?;
-        loop {
+        'command_loop: loop {
             let readline = match rl.readline(&self.prompt) {
                 Ok(o) => o,
                 Err(e) => match e {
@@ -45,16 +49,22 @@ impl<'a> Console<'a> {
                 },
             };
 
-            let commands = readline.split("|").collect::<Vec<_>>();
+            let command_lines = readline.split("|").collect::<Vec<_>>();
+            let mut commands: Vec<(&dyn Command, clap::ArgMatches)> = vec![];
 
+            /*
+             * First, parse every command in the pipeline. If one fails, then
+             * the pipeline shouldn't run at all.
+             */
             let mut previous_output = None;
             let mut previous_output_buf;
-            for command in commands {
-                let tokens = shlex::split(command)
-                    .ok_or_else(|| ConsoleError::LexingError(command.to_string()))?;
+            for command_line in command_lines {
+                let tokens = shlex::split(command_line)
+                    .ok_or_else(|| ConsoleError::LexingError(command_line.to_string()))?;
 
                 if tokens.is_empty() {
-                    continue;
+                    eprintln!("{}", ConsoleError::EmptyCommandLineError);
+                    continue 'command_loop;
                 }
 
                 if let Some(cmd) = self.commands.get(&tokens[0]) {
@@ -62,27 +72,41 @@ impl<'a> Console<'a> {
                         Ok(matches) => matches,
                         Err(e) => {
                             eprintln!("{}", e);
-                            continue;
+                            continue 'command_loop;
                         }
                     };
-
-                    let result = cmd.execute(matches, previous_output);
-
-                    match result {
-                        Ok(output) => {
-                            previous_output = match output {
-                                Some(s) => {
-                                    previous_output_buf = s;
-                                    Some(&previous_output_buf)
-                                }
-                                None => None,
-                            }
-                        }
-                        Err(e) => eprintln!("{}", e),
-                    }
+                    commands.push((*cmd, matches));
                 } else {
-                    eprintln!("Unrecognized command")
+                    eprintln!("{}", ConsoleError::UnrecognizedCommand(tokens[0].clone()));
+                    continue 'command_loop;
                 }
+            }
+
+            /*
+             * Now that we know each command exists and has appropriate
+             * arguments, run them in series and pass the output from each to
+             * the next.
+             */
+            for (command, args) in commands {
+                match command.execute(args, previous_output) {
+                    Ok(output) => {
+                        previous_output = match output {
+                            Some(s) => {
+                                previous_output_buf = s;
+                                Some(&previous_output_buf)
+                            }
+                            None => None,
+                        }
+                    }
+                    Err(e) => eprintln!("{}", e),
+                }
+            }
+
+            /*
+             * Print the output at the end of the pipeline
+             */
+            if let Some(output) = previous_output {
+                print!("{}", output);
             }
         }
     }
