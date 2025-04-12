@@ -23,7 +23,12 @@ impl Command for DirCommand {
         DirArgs::command()
     }
 
-    fn execute(&self, args: clap::ArgMatches, stdin: Option<&str>) -> Result<Option<String>, &str> {
+    fn execute(
+        &self,
+        args: clap::ArgMatches,
+        stdin: Option<&str>,
+        stdout: &mut dyn std::fmt::Write,
+    ) -> Result<(), String> {
         let args: DirArgs = clap::FromArgMatches::from_arg_matches(&args).unwrap();
 
         let path = if let Some(path) = stdin {
@@ -31,15 +36,14 @@ impl Command for DirCommand {
         } else if args.path.is_some() {
             &args.path.unwrap()
         } else {
-            return Err("No path provided as argument or from stdin");
+            return Err("No path provided as argument or from stdin".to_string());
         };
 
-        let res = format!("(dir {})", path);
         if args.verbose {
-            println!("{}", res);
+            write!(stdout, "(dir {})", path).map_err(|e| format!("IO error {}", e))?;
         }
 
-        Ok(Some(res))
+        Ok(())
     }
 }
 
@@ -65,11 +69,13 @@ impl Command for EchoCommand {
         &self,
         args: clap::ArgMatches,
         _stdin: Option<&str>,
-    ) -> Result<Option<String>, &str> {
+        stdout: &mut dyn std::fmt::Write,
+    ) -> Result<(), String> {
         let args: EchoArgs = clap::FromArgMatches::from_arg_matches(&args).unwrap();
-        let mut output = args.arg.join(" ");
-        output.push('\n');
-        Ok(Some(output))
+
+        write!(stdout, "{}", args.arg.join(" ")).map_err(|e| format!("IO error {}", e))?;
+
+        Ok(())
     }
 }
 
@@ -92,8 +98,16 @@ impl Command for UpperCommand {
         &self,
         _args: clap::ArgMatches,
         stdin: Option<&str>,
-    ) -> Result<Option<String>, &str> {
-        Ok(Some(stdin.ok_or("Foo")?.to_uppercase()))
+        stdout: &mut dyn std::fmt::Write,
+    ) -> Result<(), String> {
+        match stdin {
+            Some(_) => {
+                write!(stdout, "{}", stdin.ok_or("TODO")?.to_uppercase())
+                    .map_err(|e| format!("IO error {}", e))?;
+                Ok(())
+            }
+            None => Err("Stdin could not be read".to_string()),
+        }
     }
 }
 

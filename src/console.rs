@@ -29,7 +29,12 @@ pub trait Command {
 
     // A generic `ArgMatches` is the best we can do, so it's up to the
     // implementor to convert `args` to their desired type.
-    fn execute(&self, args: clap::ArgMatches, stdin: Option<&str>) -> Result<Option<String>, &str>;
+    fn execute(
+        &self,
+        args: clap::ArgMatches,
+        stdin: Option<&str>,
+        stdout: &mut dyn std::fmt::Write,
+    ) -> Result<(), String>;
 }
 
 pub struct Console<'a> {
@@ -56,8 +61,6 @@ impl<'a> Console<'a> {
              * First, parse every command in the pipeline. If one fails, then
              * the pipeline shouldn't run at all.
              */
-            let mut previous_output = None;
-            let mut previous_output_buf;
             for command_line in command_lines {
                 let tokens = shlex::split(command_line)
                     .ok_or_else(|| ConsoleError::LexingError(command_line.to_string()))?;
@@ -87,16 +90,19 @@ impl<'a> Console<'a> {
              * arguments, run them in series and pass the output from each to
              * the next.
              */
+            let mut previous_output = String::new();
             for (command, args) in commands {
-                match command.execute(args, previous_output) {
-                    Ok(output) => {
-                        previous_output = match output {
-                            Some(s) => {
-                                previous_output_buf = s;
-                                Some(&previous_output_buf)
-                            }
-                            None => None,
-                        }
+                let mut output_buf = String::new();
+
+                let stdin = if previous_output.is_empty() {
+                    None
+                } else {
+                    Some(previous_output.as_str())
+                };
+
+                match command.execute(args, stdin, &mut output_buf) {
+                    Ok(_) => {
+                        std::mem::swap(&mut previous_output, &mut output_buf);
                     }
                     Err(e) => eprintln!("{}", e),
                 }
@@ -105,9 +111,7 @@ impl<'a> Console<'a> {
             /*
              * Print the output at the end of the pipeline
              */
-            if let Some(output) = previous_output {
-                print!("{}", output);
-            }
+            println!("{}", previous_output);
         }
     }
 
