@@ -52,6 +52,10 @@ impl Command for DirCommand {
 struct EchoArgs {
     /// Arguments to write
     arg: Vec<String>,
+
+    /// Do not append a newline
+    #[arg(short = 'n')]
+    no_newline: bool,
 }
 
 struct EchoCommand;
@@ -73,7 +77,11 @@ impl Command for EchoCommand {
     ) -> Result<(), String> {
         let args: EchoArgs = clap::FromArgMatches::from_arg_matches(&args).unwrap();
 
-        write!(stdout, "{}", args.arg.join(" ")).map_err(|e| format!("IO error {}", e))?;
+        if args.no_newline {
+            write!(stdout, "{}", args.arg.join(" ")).map_err(|e| format!("IO error {}", e))?;
+        } else {
+            write!(stdout, "{}\n", args.arg.join(" ")).map_err(|e| format!("IO error {}", e))?;
+        }
 
         Ok(())
     }
@@ -101,8 +109,8 @@ impl Command for UpperCommand {
         stdout: &mut dyn std::fmt::Write,
     ) -> Result<(), String> {
         match stdin {
-            Some(_) => {
-                write!(stdout, "{}", stdin.ok_or("TODO")?.to_uppercase())
+            Some(stdin) => {
+                write!(stdout, "{}", stdin.to_uppercase())
                     .map_err(|e| format!("IO error {}", e))?;
                 Ok(())
             }

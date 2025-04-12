@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, io::Write as _};
 
 use rustyline::error::ReadlineError;
 use thiserror::Error;
@@ -9,6 +9,8 @@ pub enum ConsoleError {
     Uncategorized,
     #[error("Error with readline: {0}")]
     ReadlineError(ReadlineError),
+    #[error("Error writing to stdout")]
+    StdoutWriteError,
     #[error("Error splitting string: {0}")]
     LexingError(String),
     #[error("Error: empty command")]
@@ -44,7 +46,11 @@ pub struct Console<'a> {
 
 impl<'a> Console<'a> {
     pub fn cmd_loop(&mut self) -> Result<(), ConsoleError> {
-        let mut rl = rustyline::DefaultEditor::new()?;
+        let rl_config = rustyline::Config::builder()
+            .check_cursor_position(true) // Prevent overwriting of stdout
+            .build();
+        let mut rl = rustyline::DefaultEditor::with_config(rl_config)?;
+
         'command_loop: loop {
             let readline = match rl.readline(&self.prompt) {
                 Ok(o) => o,
@@ -111,7 +117,10 @@ impl<'a> Console<'a> {
             /*
              * Print the output at the end of the pipeline
              */
-            println!("{}", previous_output);
+            print!("{}", previous_output);
+            std::io::stdout()
+                .flush()
+                .map_err(|_| ConsoleError::StdoutWriteError)?;
         }
     }
 
