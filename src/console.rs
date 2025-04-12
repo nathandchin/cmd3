@@ -19,6 +19,8 @@ pub enum ConsoleError {
     UnrecognizedCommand(String),
     #[error("Error executing command: {0}")]
     CommandError(String),
+    #[error("Pipeline broken: {0}")]
+    BrokenPipeError(Box<ConsoleError>),
 }
 
 pub trait Command {
@@ -91,6 +93,8 @@ impl<'a> Console<'a> {
                 }
             }
 
+            let in_pipeline = commands.len() > 1;
+
             /*
              * Now that we know each command exists and has appropriate
              * arguments, run them in series and pass the output from each to
@@ -110,7 +114,18 @@ impl<'a> Console<'a> {
                     Ok(_) => {
                         std::mem::swap(&mut previous_output, &mut output_buf);
                     }
-                    Err(e) => eprintln!("{}", e),
+                    Err(e) => {
+                        let mut error = ConsoleError::CommandError(e);
+
+                        // If this is a pipeline of multiple commands, then wrap
+                        // the current command's error in a pipeline error.
+                        if in_pipeline {
+                            error = ConsoleError::BrokenPipeError(Box::new(error));
+                        }
+
+                        eprintln!("{}", error);
+                        continue 'command_loop;
+                    }
                 }
             }
 
