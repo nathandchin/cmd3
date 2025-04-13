@@ -28,22 +28,22 @@ pub enum ConsoleError {
 }
 
 #[derive(Helper, Completer, Validator, Hinter, Highlighter)]
-struct ConsoleHelper {
+struct ConsoleHelper<'a> {
     #[rustyline(Completer)]
-    completer: CommandCompleter,
+    completer: CommandCompleter<'a>,
 }
 
-struct CommandCompleter {
-    commands: Vec<String>,
+struct CommandCompleter<'a> {
+    commands: &'a HashMap<String, &'a dyn Command>,
 }
 
-impl CommandCompleter {
-    fn new(commands: Vec<String>) -> Self {
+impl<'a> CommandCompleter<'a> {
+    fn new(commands: &'a HashMap<String, &'a dyn Command>) -> Self {
         Self { commands }
     }
 }
 
-impl Completer for CommandCompleter {
+impl Completer for CommandCompleter<'_> {
     type Candidate = Pair;
 
     fn complete(
@@ -52,18 +52,17 @@ impl Completer for CommandCompleter {
         pos: usize,
         _ctx: &rustyline::Context<'_>,
     ) -> rustyline::Result<(usize, Vec<Pair>)> {
-        let is_first_word = {
-            let subtokens = match shlex::split(&line[0..pos]) {
-                Some(o) => o,
-                None => return Ok((pos, vec![])),
-            };
-
-            subtokens.len() > 1 || line[0..pos].contains(|o: char| o.is_whitespace())
+        let subtokens = match shlex::split(&line[0..pos]) {
+            Some(o) => o,
+            None => return Ok((pos, vec![])),
         };
+
+        let is_first_word =
+            subtokens.len() < 2 && !line[0..pos].contains(|o: char| o.is_whitespace());
 
         if is_first_word {
             let mut res = vec![];
-            for command in &self.commands {
+            for command in self.commands.keys() {
                 if command.starts_with(line) {
                     res.push(Pair {
                         display: command.to_string(),
@@ -74,7 +73,59 @@ impl Completer for CommandCompleter {
 
             Ok((pos - line.len(), res))
         } else {
-            todo!()
+            let command = match self.commands.get(&subtokens[0]) {
+                Some(c) => *c,
+                None => return Ok((pos, vec![])),
+            };
+
+            let mut completions: Vec<Pair> = vec![];
+
+            let parser = command.get_parser();
+            if line.chars().nth(pos - 1).unwrap().is_whitespace() {
+                // No current word, show all positional args
+                for arg in parser.get_positionals() {
+                    completions.push(Pair {
+                        display: arg.get_id().to_string(),
+                        replacement: "".to_string(), // Don't actually complete these metavars
+                    });
+                }
+                Ok((pos, completions))
+            } else {
+                let word = subtokens.last().unwrap();
+
+                if word.starts_with("--") {
+                    for arg in parser.get_opts() {
+                        let id = arg.get_id();
+                        let repl = format!("--{}", id);
+                        if repl.starts_with(word) {
+                            completions.push(Pair {
+                                display: format!("[{}]", repl),
+                                replacement: repl,
+                            });
+                        }
+                    }
+                    Ok((pos - word.len(), completions))
+                } else if word.starts_with("-") {
+                    for arg in parser.get_opts() {
+                        let id = arg.get_id();
+                        let (display, replacement) = if let Some(short) = arg.get_short() {
+                            (format!("[-{}, --{}]", short, id), format!("-{} ", short))
+                        } else {
+                            (format!("[--{}]", id), "".to_string())
+                        };
+
+                        if replacement.starts_with(word) {
+                            completions.push(Pair {
+                                display,
+                                replacement,
+                            });
+                        }
+                    }
+                    Ok((pos - 2, completions))
+                } else {
+                    Ok((pos, vec![]))
+                }
+            }
         }
     }
 }
@@ -106,12 +157,11 @@ impl<'a> Console<'a> {
     pub fn cmd_loop(&mut self) -> Result<(), ConsoleError> {
         let rl_config = rustyline::Config::builder()
             .check_cursor_position(true) // Prevent overwriting of stdout
+            .completion_type(rustyline::CompletionType::List)
             .build();
         let mut rl = rustyline::Editor::with_config(rl_config)?;
         rl.set_helper(Some(ConsoleHelper {
-            completer: CommandCompleter::new(
-                self.commands.keys().map(|s| s.to_string()).collect(),
-            ),
+            completer: CommandCompleter::new(&self.commands),
         }));
 
         'command_loop: loop {
