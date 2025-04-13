@@ -1,6 +1,10 @@
 use std::{collections::HashMap, io::Write as _};
 
-use rustyline::error::ReadlineError;
+use rustyline::{
+    completion::{Completer, Pair},
+    error::ReadlineError,
+    Completer, Helper, Highlighter, Hinter, Validator,
+};
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -21,6 +25,58 @@ pub enum ConsoleError {
     CommandError(String),
     #[error("Pipeline broken: {0}")]
     BrokenPipeError(Box<ConsoleError>),
+}
+
+#[derive(Helper, Completer, Validator, Hinter, Highlighter)]
+struct ConsoleHelper {
+    #[rustyline(Completer)]
+    completer: CommandCompleter,
+}
+
+struct CommandCompleter {
+    commands: Vec<String>,
+}
+
+impl CommandCompleter {
+    fn new(commands: Vec<String>) -> Self {
+        Self { commands }
+    }
+}
+
+impl Completer for CommandCompleter {
+    type Candidate = Pair;
+
+    fn complete(
+        &self,
+        line: &str,
+        pos: usize,
+        _ctx: &rustyline::Context<'_>,
+    ) -> rustyline::Result<(usize, Vec<Pair>)> {
+        let is_first_word = {
+            let subtokens = match shlex::split(&line[0..pos]) {
+                Some(o) => o,
+                None => return Ok((pos, vec![])),
+            };
+
+            subtokens.len() > 1 || line[0..pos].contains(|o: char| o.is_whitespace())
+        };
+
+        if is_first_word {
+            let mut res = vec![];
+            for command in &self.commands {
+                if command.starts_with(line) {
+                    res.push(Pair {
+                        display: command.to_string(),
+                        replacement: command.to_string(),
+                    });
+                }
+            }
+
+            Ok((pos - line.len(), res))
+        } else {
+            todo!()
+        }
+    }
 }
 
 pub trait Command {
@@ -51,7 +107,12 @@ impl<'a> Console<'a> {
         let rl_config = rustyline::Config::builder()
             .check_cursor_position(true) // Prevent overwriting of stdout
             .build();
-        let mut rl = rustyline::DefaultEditor::with_config(rl_config)?;
+        let mut rl = rustyline::Editor::with_config(rl_config)?;
+        rl.set_helper(Some(ConsoleHelper {
+            completer: CommandCompleter::new(
+                self.commands.keys().map(|s| s.to_string()).collect(),
+            ),
+        }));
 
         'command_loop: loop {
             let readline = match rl.readline(&self.prompt) {
