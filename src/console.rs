@@ -52,6 +52,13 @@ impl Completer for CommandCompleter<'_> {
         pos: usize,
         _ctx: &rustyline::Context<'_>,
     ) -> rustyline::Result<(usize, Vec<Pair>)> {
+        let orig_pos = pos;
+        let (line, pos) = if let Some(i) = line.rfind('|') {
+            (&line[i + 1..], pos - i - 1)
+        } else {
+            (line, pos)
+        };
+
         let subtokens = match shlex::split(&line[0..pos]) {
             Some(o) => o,
             None => return Ok((pos, vec![])),
@@ -71,11 +78,11 @@ impl Completer for CommandCompleter<'_> {
                 }
             }
 
-            Ok((pos - line.len(), res))
+            Ok((orig_pos - line.len(), res))
         } else {
             let command = match self.commands.get(&subtokens[0]) {
                 Some(c) => *c,
-                None => return Ok((pos, vec![])),
+                None => return Ok((orig_pos, vec![])),
             };
 
             let mut completions: Vec<Pair> = vec![];
@@ -89,7 +96,7 @@ impl Completer for CommandCompleter<'_> {
                         replacement: "".to_string(), // Don't actually complete these metavars
                     });
                 }
-                Ok((pos, completions))
+                Ok((orig_pos, completions))
             } else {
                 let word = subtokens.last().unwrap();
 
@@ -104,7 +111,7 @@ impl Completer for CommandCompleter<'_> {
                             });
                         }
                     }
-                    Ok((pos - word.len(), completions))
+                    Ok((orig_pos - word.len(), completions))
                 } else if word.starts_with("-") {
                     for arg in parser.get_opts() {
                         let id = arg.get_id();
@@ -121,9 +128,9 @@ impl Completer for CommandCompleter<'_> {
                             });
                         }
                     }
-                    Ok((pos - 2, completions))
+                    Ok((orig_pos - 2, completions))
                 } else {
-                    Ok((pos, vec![]))
+                    Ok((orig_pos, vec![]))
                 }
             }
         }
