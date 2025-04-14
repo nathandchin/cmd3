@@ -78,7 +78,7 @@ impl Completer for CommandCompleter<'_> {
                 }
             }
 
-            Ok((orig_pos - line.len(), res))
+            Ok((orig_pos.saturating_sub(line.len()), res))
         } else {
             let command = match self.commands.get(&subtokens[0]) {
                 Some(c) => *c,
@@ -128,7 +128,7 @@ impl Completer for CommandCompleter<'_> {
                             });
                         }
                     }
-                    Ok((orig_pos - 2, completions))
+                    Ok((orig_pos - word.len(), completions))
                 } else {
                     Ok((orig_pos, vec![]))
                 }
