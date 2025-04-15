@@ -68,6 +68,7 @@ impl Completer for CommandCompleter<'_> {
             subtokens.len() < 2 && !line[0..pos].contains(|o: char| o.is_whitespace());
 
         if is_first_word {
+            // We are completing the name of a command
             let mut res = vec![];
             for command in self.commands.keys() {
                 if command.starts_with(line) {
@@ -80,16 +81,17 @@ impl Completer for CommandCompleter<'_> {
 
             Ok((orig_pos.saturating_sub(line.len()), res))
         } else {
+            // We are completing an argument to a command
             let command = match self.commands.get(&subtokens[0]) {
                 Some(c) => *c,
-                None => return Ok((orig_pos, vec![])),
+                None => return Ok((orig_pos, vec![])), // Unrecognized command
             };
 
             let mut completions: Vec<Pair> = vec![];
-
             let parser = command.get_parser();
+
             if line.chars().nth(pos - 1).unwrap().is_whitespace() {
-                // No current word, show all positional args
+                // Cursor is not on a word, show all positional args
                 for arg in parser.get_positionals() {
                     completions.push(Pair {
                         display: arg.get_id().to_string(),
@@ -101,25 +103,42 @@ impl Completer for CommandCompleter<'_> {
                 let word = subtokens.last().unwrap();
 
                 if word.starts_with("--") {
+                    // Long form
                     for arg in parser.get_opts() {
-                        let id = arg.get_id();
-                        let repl = format!("--{}", id);
-                        if repl.starts_with(word) {
-                            completions.push(Pair {
-                                display: format!("[{}]", repl),
-                                replacement: repl,
-                            });
+                        if let Some(long) = arg.get_long() {
+                            // Only one possibility: long form
+                            let replacement = format!("--{}", long);
+
+                            if replacement.starts_with(word) {
+                                completions.push(Pair {
+                                    display: format!("[{}]", replacement),
+                                    replacement,
+                                });
+                            }
                         }
                     }
                     Ok((orig_pos - word.len(), completions))
                 } else if word.starts_with("-") {
+                    // Short OR long form
                     for arg in parser.get_opts() {
-                        let id = arg.get_id();
-                        let (display, replacement) = if let Some(short) = arg.get_short() {
-                            (format!("[-{}, --{}]", short, id), format!("-{} ", short))
-                        } else {
-                            (format!("[--{}]", id), "".to_string())
-                        };
+                        let long = arg.get_long();
+                        let short = arg.get_short();
+
+                        // Can be any of long+short, long only, or short only
+                        let (display, replacement) =
+                            if let (Some(long), Some(short)) = (long, short) {
+                                (format!("[-{}, --{}]", short, long), format!("-{} ", short))
+                            } else if let Some(long) = long {
+                                (format!("[--{}]", long), format!("--{} ", long))
+                            } else if let Some(short) = short {
+                                (format!("[-{}]", short), format!("-{} ", short))
+                            } else {
+                                // Trying to use such an arg will be a runtime
+                                // error when the parser is invoked, but it
+                                // won't appear in the result of `get_opts()` so
+                                // it doesn't come into play here.
+                                unreachable!("Arg must have at least one of long or short form");
+                            };
 
                         if replacement.starts_with(word) {
                             completions.push(Pair {
@@ -130,6 +149,9 @@ impl Completer for CommandCompleter<'_> {
                     }
                     Ok((orig_pos - word.len(), completions))
                 } else {
+                    // Must be a positional arg, don't bother completing them
+                    // since their names are just metavars. Possibly implement
+                    // custom completers here?
                     Ok((orig_pos, vec![]))
                 }
             }
