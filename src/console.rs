@@ -1,6 +1,10 @@
 use std::{collections::HashMap, io::Write as _};
 
-use rustyline::error::ReadlineError;
+use rustyline::{
+    completion::{Completer, Pair},
+    error::ReadlineError,
+    Completer, Helper, Highlighter, Hinter, Validator,
+};
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -21,6 +25,138 @@ pub enum ConsoleError {
     CommandError(String),
     #[error("Pipeline broken: {0}")]
     BrokenPipeError(Box<ConsoleError>),
+}
+
+#[derive(Helper, Completer, Validator, Hinter, Highlighter)]
+struct ConsoleHelper<'a> {
+    #[rustyline(Completer)]
+    completer: CommandCompleter<'a>,
+}
+
+struct CommandCompleter<'a> {
+    commands: &'a HashMap<String, &'a dyn Command>,
+}
+
+impl<'a> CommandCompleter<'a> {
+    fn new(commands: &'a HashMap<String, &'a dyn Command>) -> Self {
+        Self { commands }
+    }
+}
+
+impl Completer for CommandCompleter<'_> {
+    type Candidate = Pair;
+
+    fn complete(
+        &self,
+        line: &str,
+        pos: usize,
+        _ctx: &rustyline::Context<'_>,
+    ) -> rustyline::Result<(usize, Vec<Pair>)> {
+        let orig_pos = pos;
+        let (line, pos) = if let Some(i) = line.rfind('|') {
+            (&line[i + 1..], pos - i - 1)
+        } else {
+            (line, pos)
+        };
+
+        let subtokens = match shlex::split(&line[0..pos]) {
+            Some(o) => o,
+            None => return Ok((pos, vec![])),
+        };
+
+        let is_first_word =
+            subtokens.len() < 2 && !line[0..pos].contains(|o: char| o.is_whitespace());
+
+        if is_first_word {
+            // We are completing the name of a command
+            let mut res = vec![];
+            for command in self.commands.keys() {
+                if command.starts_with(line) {
+                    res.push(Pair {
+                        display: command.to_string(),
+                        replacement: command.to_string(),
+                    });
+                }
+            }
+
+            Ok((orig_pos.saturating_sub(line.len()), res))
+        } else {
+            // We are completing an argument to a command
+            let command = match self.commands.get(&subtokens[0]) {
+                Some(c) => *c,
+                None => return Ok((orig_pos, vec![])), // Unrecognized command
+            };
+
+            let mut completions: Vec<Pair> = vec![];
+            let parser = command.get_parser();
+
+            if line.chars().nth(pos - 1).unwrap().is_whitespace() {
+                // Cursor is not on a word, show all positional args
+                for arg in parser.get_positionals() {
+                    completions.push(Pair {
+                        display: arg.get_id().to_string(),
+                        replacement: "".to_string(), // Don't actually complete these metavars
+                    });
+                }
+                Ok((orig_pos, completions))
+            } else {
+                let word = subtokens.last().unwrap();
+
+                if word.starts_with("--") {
+                    // Long form
+                    for arg in parser.get_opts() {
+                        if let Some(long) = arg.get_long() {
+                            // Only one possibility: long form
+                            let replacement = format!("--{}", long);
+
+                            if replacement.starts_with(word) {
+                                completions.push(Pair {
+                                    display: format!("[{}]", replacement),
+                                    replacement,
+                                });
+                            }
+                        }
+                    }
+                    Ok((orig_pos - word.len(), completions))
+                } else if word.starts_with("-") {
+                    // Short OR long form
+                    for arg in parser.get_opts() {
+                        let long = arg.get_long();
+                        let short = arg.get_short();
+
+                        // Can be any of long+short, long only, or short only
+                        let (display, replacement) =
+                            if let (Some(long), Some(short)) = (long, short) {
+                                (format!("[-{}, --{}]", short, long), format!("-{} ", short))
+                            } else if let Some(long) = long {
+                                (format!("[--{}]", long), format!("--{} ", long))
+                            } else if let Some(short) = short {
+                                (format!("[-{}]", short), format!("-{} ", short))
+                            } else {
+                                // Trying to use such an arg will be a runtime
+                                // error when the parser is invoked, but it
+                                // won't appear in the result of `get_opts()` so
+                                // it doesn't come into play here.
+                                unreachable!("Arg must have at least one of long or short form");
+                            };
+
+                        if replacement.starts_with(word) {
+                            completions.push(Pair {
+                                display,
+                                replacement,
+                            });
+                        }
+                    }
+                    Ok((orig_pos - word.len(), completions))
+                } else {
+                    // Must be a positional arg, don't bother completing them
+                    // since their names are just metavars. Possibly implement
+                    // custom completers here?
+                    Ok((orig_pos, vec![]))
+                }
+            }
+        }
+    }
 }
 
 pub trait Command {
@@ -50,8 +186,12 @@ impl<'a> Console<'a> {
     pub fn cmd_loop(&mut self) -> Result<(), ConsoleError> {
         let rl_config = rustyline::Config::builder()
             .check_cursor_position(true) // Prevent overwriting of stdout
+            .completion_type(rustyline::CompletionType::List)
             .build();
-        let mut rl = rustyline::DefaultEditor::with_config(rl_config)?;
+        let mut rl = rustyline::Editor::with_config(rl_config)?;
+        rl.set_helper(Some(ConsoleHelper {
+            completer: CommandCompleter::new(&self.commands),
+        }));
 
         'command_loop: loop {
             let readline = match rl.readline(&self.prompt) {
