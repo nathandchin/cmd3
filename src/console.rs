@@ -1,4 +1,9 @@
-use std::{collections::HashMap, io::Write as _};
+use std::{
+    collections::{HashMap, VecDeque},
+    fmt::Write as _,
+    io::Write as _,
+    process::Stdio,
+};
 
 use rustyline::{
     completion::{Completer, Pair},
@@ -177,6 +182,17 @@ pub trait Command {
     ) -> Result<(), String>;
 }
 
+enum Runnable<'a> {
+    External {
+        name: String,
+        args: Vec<String>,
+    },
+    Command {
+        cmd: &'a dyn Command,
+        args: clap::ArgMatches,
+    },
+}
+
 pub struct Console<'a> {
     prompt: String,
     commands: HashMap<String, &'a dyn Command>,
@@ -203,7 +219,8 @@ impl<'a> Console<'a> {
             };
 
             let command_lines = readline.split("|").collect::<Vec<_>>();
-            let mut commands: Vec<(&dyn Command, clap::ArgMatches)> = vec![];
+
+            let mut runnables: VecDeque<Runnable> = VecDeque::new();
 
             /*
              * First, parse every command in the pipeline. If one fails, then
@@ -218,7 +235,24 @@ impl<'a> Console<'a> {
                     continue 'command_loop;
                 }
 
-                if let Some(cmd) = self.commands.get(&tokens[0]) {
+                // Handle possible external commands, prefixed by !
+                let (external_cmd, rest) = if tokens[0] == "!" {
+                    // Standalone '!'
+                    (tokens.get(1).map(|s| s.as_str()), &tokens[2..])
+                } else if tokens[0].chars().nth(0).is_some_and(|c| c == '!') {
+                    // Command starts with '!'
+                    (tokens.get(0).map(|s| &s[1..]), &tokens[1..])
+                } else {
+                    // No '!'
+                    (None, &[] as &[String])
+                };
+
+                if let Some(program) = external_cmd {
+                    runnables.push_back(Runnable::External {
+                        name: program.to_string(),
+                        args: rest.to_vec(),
+                    });
+                } else if let Some(&cmd) = self.commands.get(&tokens[0]) {
                     let matches = match cmd.get_parser().try_get_matches_from(&tokens) {
                         Ok(matches) => matches,
                         Err(e) => {
@@ -226,14 +260,15 @@ impl<'a> Console<'a> {
                             continue 'command_loop;
                         }
                     };
-                    commands.push((*cmd, matches));
+
+                    runnables.push_back(Runnable::Command { cmd, args: matches });
                 } else {
                     eprintln!("{}", ConsoleError::UnrecognizedCommand(tokens[0].clone()));
                     continue 'command_loop;
                 }
             }
 
-            let in_pipeline = commands.len() > 1;
+            let in_pipeline = runnables.len() > 1;
 
             /*
              * Now that we know each command exists and has appropriate
@@ -241,30 +276,85 @@ impl<'a> Console<'a> {
              * the next.
              */
             let mut previous_output = String::new();
-            for (command, args) in commands {
-                let mut output_buf = String::new();
-
+            while let Some(runnable) = runnables.pop_front() {
                 let stdin = if previous_output.is_empty() {
                     None
                 } else {
                     Some(previous_output.as_str())
                 };
+                let mut output_buf = String::new();
 
-                match command.execute(args, stdin, &mut output_buf) {
-                    Ok(_) => {
-                        std::mem::swap(&mut previous_output, &mut output_buf);
-                    }
-                    Err(e) => {
-                        let mut error = ConsoleError::CommandError(e);
+                match runnable {
+                    Runnable::External { name, args } => {
+                        let mut child = std::process::Command::new(name.to_string())
+                            .args(args)
+                            .stdin(Stdio::piped())
+                            .stdout(Stdio::piped())
+                            .spawn()
+                            .map_err(|e| e.to_string())
+                            .expect("TODO");
 
-                        // If this is a pipeline of multiple commands, then wrap
-                        // the current command's error in a pipeline error.
-                        if in_pipeline {
-                            error = ConsoleError::BrokenPipeError(Box::new(error));
+                        if let Some(stdin) = stdin {
+                            std::thread::scope(|s| {
+                                let mut child_stdin = child
+                                    .stdin
+                                    .take()
+                                    .ok_or_else(|| {
+                                        format!(
+                                            "Could not acquire stdin for child process {}",
+                                            name
+                                        )
+                                    })
+                                    .unwrap();
+                                s.spawn(move || child_stdin.write_all(stdin.as_bytes()))
+                                    .join()
+                                    .expect("TODO - panic")
+                                    .expect("TODO - IO error");
+                            })
                         }
 
-                        eprintln!("{}", error);
-                        continue 'command_loop;
+                        let output = child.wait_with_output().expect("TODO");
+                        eprint!("{}", String::from_utf8_lossy(&output.stderr));
+                        match write!(output_buf, "{}", String::from_utf8_lossy(&output.stdout))
+                            .map_err(|e| format!("IO error {}", e))
+                        {
+                            Ok(_) => (),
+                            Err(e) => {
+                                let mut error = ConsoleError::CommandError(e);
+
+                                // If this is a pipeline of multiple commands, then wrap
+                                // the current command's error in a pipeline error.
+                                if in_pipeline {
+                                    error = ConsoleError::BrokenPipeError(Box::new(error));
+                                }
+
+                                eprintln!("{}", error);
+                                continue 'command_loop;
+                            }
+                        }
+
+                        std::mem::swap(&mut previous_output, &mut output_buf);
+                    }
+                    Runnable::Command { cmd, args } => {
+                        let mut output_buf = String::new();
+
+                        match cmd.execute(args, stdin, &mut output_buf) {
+                            Ok(_) => {
+                                std::mem::swap(&mut previous_output, &mut output_buf);
+                            }
+                            Err(e) => {
+                                let mut error = ConsoleError::CommandError(e);
+
+                                // If this is a pipeline of multiple commands, then wrap
+                                // the current command's error in a pipeline error.
+                                if in_pipeline {
+                                    error = ConsoleError::BrokenPipeError(Box::new(error));
+                                }
+
+                                eprintln!("{}", error);
+                                continue 'command_loop;
+                            }
+                        }
                     }
                 }
             }
