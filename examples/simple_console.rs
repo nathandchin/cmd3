@@ -1,3 +1,5 @@
+use std::{cell::RefCell, rc::Rc};
+
 use clap::CommandFactory as _;
 use cmd3::console::{Command, Console};
 
@@ -24,7 +26,7 @@ impl Command for DirCommand {
     }
 
     fn execute(
-        &self,
+        &mut self,
         args: clap::ArgMatches,
         stdin: &str,
         stdout: &mut dyn std::fmt::Write,
@@ -70,7 +72,7 @@ impl Command for EchoCommand {
     }
 
     fn execute(
-        &self,
+        &mut self,
         args: clap::ArgMatches,
         _stdin: &str,
         stdout: &mut dyn std::fmt::Write,
@@ -103,7 +105,7 @@ impl Command for UpperCommand {
     }
 
     fn execute(
-        &self,
+        &mut self,
         _args: clap::ArgMatches,
         stdin: &str,
         stdout: &mut dyn std::fmt::Write,
@@ -115,9 +117,9 @@ impl Command for UpperCommand {
 
 fn main() {
     let mut console = Console::default()
-        .add_command(&DirCommand {})
-        .add_command(&EchoCommand {})
-        .add_command(&UpperCommand {});
+        .add_command(Rc::new(RefCell::new(DirCommand {})))
+        .add_command(Rc::new(RefCell::new(EchoCommand {})))
+        .add_command(Rc::new(RefCell::new(UpperCommand {})));
 
     if let Err(e) = console.cmd_loop() {
         eprintln!("{}", e);

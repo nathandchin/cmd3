@@ -1,8 +1,10 @@
 use std::{
+    cell::RefCell,
     collections::{HashMap, VecDeque},
     fmt::Write as _,
     io::Write as _,
     process::Stdio,
+    rc::Rc,
 };
 
 use rustyline::{
@@ -33,22 +35,22 @@ pub enum ConsoleError {
 }
 
 #[derive(Helper, Completer, Validator, Hinter, Highlighter)]
-struct ConsoleHelper<'a> {
+struct ConsoleHelper {
     #[rustyline(Completer)]
-    completer: CommandCompleter<'a>,
+    completer: CommandCompleter,
 }
 
-struct CommandCompleter<'a> {
-    commands: &'a HashMap<String, &'a dyn Command>,
+struct CommandCompleter {
+    parsers: HashMap<String, clap::Command>,
 }
 
-impl<'a> CommandCompleter<'a> {
-    fn new(commands: &'a HashMap<String, &'a dyn Command>) -> Self {
-        Self { commands }
+impl CommandCompleter {
+    fn new(parsers: HashMap<String, clap::Command>) -> Self {
+        Self { parsers }
     }
 }
 
-impl Completer for CommandCompleter<'_> {
+impl Completer for CommandCompleter {
     type Candidate = Pair;
 
     fn complete(
@@ -75,7 +77,7 @@ impl Completer for CommandCompleter<'_> {
         if is_first_word {
             // We are completing the name of a command
             let mut res = vec![];
-            for command in self.commands.keys() {
+            for command in self.parsers.keys() {
                 if command.starts_with(line) {
                     res.push(Pair {
                         display: command.to_string(),
@@ -87,13 +89,12 @@ impl Completer for CommandCompleter<'_> {
             Ok((orig_pos.saturating_sub(line.len()), res))
         } else {
             // We are completing an argument to a command
-            let command = match self.commands.get(&subtokens[0]) {
-                Some(c) => *c,
+            let parser = match self.parsers.get(&subtokens[0]) {
+                Some(c) => c,
                 None => return Ok((orig_pos, vec![])), // Unrecognized command
             };
 
             let mut completions: Vec<Pair> = vec![];
-            let parser = command.get_parser();
 
             if line.chars().nth(pos - 1).unwrap().is_whitespace() {
                 // Cursor is not on a word, show all positional args
@@ -175,27 +176,27 @@ pub trait Command {
     // A generic `ArgMatches` is the best we can do, so it's up to the
     // implementor to convert `args` to their desired type.
     fn execute(
-        &self,
+        &mut self,
         args: clap::ArgMatches,
         stdin: &str,
         stdout: &mut dyn std::fmt::Write,
     ) -> Result<(), String>;
 }
 
-enum Runnable<'a> {
+enum Runnable {
     External {
         name: String,
         args: Vec<String>,
     },
     Command {
-        cmd: &'a dyn Command,
+        cmd: Rc<RefCell<dyn Command>>,
         args: clap::ArgMatches,
     },
 }
 
-pub struct Console<'a> {
+pub struct Console {
     prompt: String,
-    commands: HashMap<String, &'a dyn Command>,
+    commands: HashMap<String, Rc<RefCell<dyn Command>>>,
 }
 
 fn split_pipeline(pipeline: &str) -> Vec<&str> {
@@ -242,7 +243,7 @@ fn split_pipeline(pipeline: &str) -> Vec<&str> {
     command_lines
 }
 
-impl<'a> Console<'a> {
+impl Console {
     pub fn cmd_loop(&mut self) -> Result<(), ConsoleError> {
         let rl_config = rustyline::Config::builder()
             .check_cursor_position(true) // Prevent overwriting of stdout
@@ -250,7 +251,12 @@ impl<'a> Console<'a> {
             .build();
         let mut rl = rustyline::Editor::with_config(rl_config)?;
         rl.set_helper(Some(ConsoleHelper {
-            completer: CommandCompleter::new(&self.commands),
+            completer: CommandCompleter::new(
+                self.commands
+                    .iter()
+                    .map(|(name, cmd)| (name.clone(), cmd.borrow().get_parser()))
+                    .collect(),
+            ),
         }));
 
         'command_loop: loop {
@@ -295,8 +301,8 @@ impl<'a> Console<'a> {
                         name: program.to_string(),
                         args: rest.to_vec(),
                     });
-                } else if let Some(&cmd) = self.commands.get(&tokens[0]) {
-                    let matches = match cmd.get_parser().try_get_matches_from(&tokens) {
+                } else if let Some(cmd) = self.commands.get(&tokens[0]) {
+                    let matches = match cmd.borrow().get_parser().try_get_matches_from(&tokens) {
                         Ok(matches) => matches,
                         Err(e) => {
                             eprintln!("{}", e);
@@ -304,7 +310,10 @@ impl<'a> Console<'a> {
                         }
                     };
 
-                    runnables.push_back(Runnable::Command { cmd, args: matches });
+                    runnables.push_back(Runnable::Command {
+                        cmd: Rc::clone(cmd),
+                        args: matches,
+                    });
                 } else {
                     eprintln!("{}", ConsoleError::UnrecognizedCommand(tokens[0].clone()));
                     continue 'command_loop;
@@ -331,10 +340,13 @@ impl<'a> Console<'a> {
                         ),
                         name,
                     ),
-                    Runnable::Command { cmd, args } => (
-                        cmd.execute(args, &previous_output, &mut output_buf),
-                        cmd.get_name(),
-                    ),
+                    Runnable::Command { cmd, args } => {
+                        let cmd = &mut *cmd.borrow_mut();
+                        (
+                            cmd.execute(args, &previous_output, &mut output_buf),
+                            cmd.get_name(),
+                        )
+                    }
                 };
 
                 if let Err(error_msg) = res {
@@ -407,13 +419,14 @@ impl<'a> Console<'a> {
         Ok(())
     }
 
-    pub fn add_command(mut self, cmd: &'a dyn Command) -> Self {
-        self.commands.insert(cmd.get_name(), cmd);
+    pub fn add_command(mut self, cmd: Rc<RefCell<dyn Command>>) -> Self {
+        self.commands
+            .insert(cmd.borrow().get_name(), Rc::clone(&cmd));
         self
     }
 }
 
-impl Default for Console<'_> {
+impl Default for Console {
     fn default() -> Self {
         Self {
             prompt: "> ".to_string(),
