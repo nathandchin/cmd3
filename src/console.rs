@@ -20,7 +20,7 @@ pub enum ConsoleError {
     ReadlineError(ReadlineError),
     #[error("Error writing to stdout")]
     StdoutWriteError,
-    #[error("Error splitting string: {0}")]
+    #[error("Error lexing string: {0}")]
     LexingError(String),
     #[error("Error: empty command")]
     EmptyCommandLineError,
@@ -198,6 +198,50 @@ pub struct Console<'a> {
     commands: HashMap<String, &'a dyn Command>,
 }
 
+fn split_pipeline(pipeline: &str) -> Vec<&str> {
+    enum Quote {
+        Single,
+        Double,
+    }
+
+    let mut quote = None;
+    let mut command_lines = vec![];
+    let mut last_end_idx = 0;
+    for (idx, ch) in pipeline.char_indices() {
+        match ch {
+            '\'' => {
+                quote = match quote {
+                    Some(kind) => match kind {
+                        Quote::Single => None,
+                        Quote::Double => Some(Quote::Single),
+                    },
+                    None => Some(Quote::Single),
+                };
+            }
+            '"' => {
+                quote = match quote {
+                    Some(kind) => match kind {
+                        Quote::Single => Some(Quote::Double),
+                        Quote::Double => None,
+                    },
+                    None => Some(Quote::Double),
+                };
+            }
+            '|' => {
+                if quote.is_none() {
+                    command_lines.push(&pipeline[last_end_idx..idx]);
+                    last_end_idx = idx + 1
+                }
+            }
+            _ => (),
+        }
+    }
+    // Last one
+    command_lines.push(&pipeline[last_end_idx..]);
+
+    command_lines
+}
+
 impl<'a> Console<'a> {
     pub fn cmd_loop(&mut self) -> Result<(), ConsoleError> {
         let rl_config = rustyline::Config::builder()
@@ -218,8 +262,7 @@ impl<'a> Console<'a> {
                 },
             };
 
-            let command_lines = readline.split("|").collect::<Vec<_>>();
-
+            let command_lines = split_pipeline(&readline);
             let mut runnables: VecDeque<Runnable> = VecDeque::new();
 
             /*
