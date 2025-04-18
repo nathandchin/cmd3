@@ -26,8 +26,8 @@ pub enum ConsoleError {
     EmptyCommandLineError,
     #[error("Unrecognized command: `{0}`")]
     UnrecognizedCommand(String),
-    #[error("Error executing command: {0}")]
-    CommandError(String),
+    #[error("Error executing command `{0}`: {1}")]
+    CommandError(String, String),
     #[error("Pipeline broken: {0}")]
     BrokenPipeError(Box<ConsoleError>),
 }
@@ -177,7 +177,7 @@ pub trait Command {
     fn execute(
         &self,
         args: clap::ArgMatches,
-        stdin: Option<&str>,
+        stdin: &str,
         stdout: &mut dyn std::fmt::Write,
     ) -> Result<(), String>;
 }
@@ -241,7 +241,7 @@ impl<'a> Console<'a> {
                     (tokens.get(1).map(|s| s.as_str()), &tokens[2..])
                 } else if tokens[0].chars().nth(0).is_some_and(|c| c == '!') {
                     // Command starts with '!'
-                    (tokens.get(0).map(|s| &s[1..]), &tokens[1..])
+                    (tokens.first().map(|s| &s[1..]), &tokens[1..])
                 } else {
                     // No '!'
                     (None, &[] as &[String])
@@ -277,86 +277,37 @@ impl<'a> Console<'a> {
              */
             let mut previous_output = String::new();
             while let Some(runnable) = runnables.pop_front() {
-                let stdin = if previous_output.is_empty() {
-                    None
-                } else {
-                    Some(previous_output.as_str())
-                };
                 let mut output_buf = String::new();
+                let (res, command_name) = match runnable {
+                    Runnable::External { name, args } => (
+                        Self::run_external_command(
+                            &name,
+                            &args.iter().map(|s| s.as_str()).collect(),
+                            &previous_output,
+                            &mut output_buf,
+                        ),
+                        name,
+                    ),
+                    Runnable::Command { cmd, args } => (
+                        cmd.execute(args, &previous_output, &mut output_buf),
+                        cmd.get_name(),
+                    ),
+                };
 
-                match runnable {
-                    Runnable::External { name, args } => {
-                        let mut child = std::process::Command::new(name.to_string())
-                            .args(args)
-                            .stdin(Stdio::piped())
-                            .stdout(Stdio::piped())
-                            .spawn()
-                            .map_err(|e| e.to_string())
-                            .expect("TODO");
+                if let Err(error_msg) = res {
+                    let mut error = ConsoleError::CommandError(command_name, error_msg);
 
-                        if let Some(stdin) = stdin {
-                            std::thread::scope(|s| {
-                                let mut child_stdin = child
-                                    .stdin
-                                    .take()
-                                    .ok_or_else(|| {
-                                        format!(
-                                            "Could not acquire stdin for child process {}",
-                                            name
-                                        )
-                                    })
-                                    .unwrap();
-                                s.spawn(move || child_stdin.write_all(stdin.as_bytes()))
-                                    .join()
-                                    .expect("TODO - panic")
-                                    .expect("TODO - IO error");
-                            })
-                        }
-
-                        let output = child.wait_with_output().expect("TODO");
-                        eprint!("{}", String::from_utf8_lossy(&output.stderr));
-                        match write!(output_buf, "{}", String::from_utf8_lossy(&output.stdout))
-                            .map_err(|e| format!("IO error {}", e))
-                        {
-                            Ok(_) => (),
-                            Err(e) => {
-                                let mut error = ConsoleError::CommandError(e);
-
-                                // If this is a pipeline of multiple commands, then wrap
-                                // the current command's error in a pipeline error.
-                                if in_pipeline {
-                                    error = ConsoleError::BrokenPipeError(Box::new(error));
-                                }
-
-                                eprintln!("{}", error);
-                                continue 'command_loop;
-                            }
-                        }
-
-                        std::mem::swap(&mut previous_output, &mut output_buf);
+                    // If this is a pipeline of multiple commands, then wrap
+                    // the current command's error in a pipeline error.
+                    if in_pipeline {
+                        error = ConsoleError::BrokenPipeError(Box::new(error));
                     }
-                    Runnable::Command { cmd, args } => {
-                        let mut output_buf = String::new();
 
-                        match cmd.execute(args, stdin, &mut output_buf) {
-                            Ok(_) => {
-                                std::mem::swap(&mut previous_output, &mut output_buf);
-                            }
-                            Err(e) => {
-                                let mut error = ConsoleError::CommandError(e);
-
-                                // If this is a pipeline of multiple commands, then wrap
-                                // the current command's error in a pipeline error.
-                                if in_pipeline {
-                                    error = ConsoleError::BrokenPipeError(Box::new(error));
-                                }
-
-                                eprintln!("{}", error);
-                                continue 'command_loop;
-                            }
-                        }
-                    }
+                    eprintln!("{}", error);
+                    continue 'command_loop;
                 }
+
+                std::mem::swap(&mut previous_output, &mut output_buf);
             }
 
             /*
@@ -367,6 +318,50 @@ impl<'a> Console<'a> {
                 .flush()
                 .map_err(|_| ConsoleError::StdoutWriteError)?;
         }
+    }
+
+    fn run_external_command(
+        name: &str,
+        args: &Vec<&str>,
+        stdin: &str,
+        stdout: &mut String,
+    ) -> Result<(), String> {
+        /*
+         * There are a lot of `expect()`s here. Maybe at some point these can be
+         * handled, but for now they are outside the scope of an
+         * user-interactive application.
+         */
+
+        let mut child = std::process::Command::new(name)
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            // .map_err(|e| e.to_string())?;
+            .map_err(|e| e.to_string())?;
+
+        let mut child_stdin = child
+            .stdin
+            .take()
+            .expect("Could not acquire stdin for child process");
+
+        std::thread::scope(|s| {
+            s.spawn(move || child_stdin.write_all(stdin.as_bytes()))
+                .join()
+                .expect("Panic while writing to child process stdin")
+        })
+        .expect("io error while writing to child process stdin");
+
+        let output = child.wait_with_output().expect("TODO");
+
+        // This avoids the pipeline and just goes to the console process's
+        // stderr.
+        eprint!("{}", String::from_utf8_lossy(&output.stderr));
+
+        write!(stdout, "{}", String::from_utf8_lossy(&output.stdout))
+            .map_err(|e| format!("IO error {}", e))?;
+
+        Ok(())
     }
 
     pub fn add_command(mut self, cmd: &'a dyn Command) -> Self {

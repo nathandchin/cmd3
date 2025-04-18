@@ -26,13 +26,13 @@ impl Command for DirCommand {
     fn execute(
         &self,
         args: clap::ArgMatches,
-        stdin: Option<&str>,
+        stdin: &str,
         stdout: &mut dyn std::fmt::Write,
     ) -> Result<(), String> {
         let args: DirArgs = clap::FromArgMatches::from_arg_matches(&args).unwrap();
 
-        let path = if let Some(path) = stdin {
-            path
+        let path = if !stdin.is_empty() {
+            stdin
         } else if args.path.is_some() {
             &args.path.unwrap()
         } else {
@@ -72,7 +72,7 @@ impl Command for EchoCommand {
     fn execute(
         &self,
         args: clap::ArgMatches,
-        _stdin: Option<&str>,
+        _stdin: &str,
         stdout: &mut dyn std::fmt::Write,
     ) -> Result<(), String> {
         let args: EchoArgs = clap::FromArgMatches::from_arg_matches(&args).unwrap();
@@ -105,17 +105,11 @@ impl Command for UpperCommand {
     fn execute(
         &self,
         _args: clap::ArgMatches,
-        stdin: Option<&str>,
+        stdin: &str,
         stdout: &mut dyn std::fmt::Write,
     ) -> Result<(), String> {
-        match stdin {
-            Some(stdin) => {
-                write!(stdout, "{}", stdin.to_uppercase())
-                    .map_err(|e| format!("IO error {}", e))?;
-                Ok(())
-            }
-            None => Err("Stdin could not be read".to_string()),
-        }
+        write!(stdout, "{}", stdin.to_uppercase()).map_err(|e| format!("IO error {}", e))?;
+        Ok(())
     }
 }
 
