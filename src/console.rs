@@ -246,6 +246,7 @@ impl<'a> Console<'a> {
     pub fn cmd_loop(&mut self) -> Result<(), ConsoleError> {
         let rl_config = rustyline::Config::builder()
             .check_cursor_position(true) // Prevent overwriting of stdout
+            .auto_add_history(true)
             .completion_type(rustyline::CompletionType::List)
             .build();
         let mut rl = rustyline::Editor::with_config(rl_config)?;
