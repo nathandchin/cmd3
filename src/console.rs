@@ -176,6 +176,7 @@ pub trait Command {
     // implementor to convert `args` to their desired type.
     fn execute(
         &self,
+        state: &mut ConsoleState,
         args: clap::ArgMatches,
         stdin: &str,
         stdout: &mut dyn std::fmt::Write,
@@ -196,6 +197,17 @@ enum Runnable<'a> {
 pub struct Console<'a> {
     prompt: String,
     commands: HashMap<String, &'a dyn Command>,
+    state: ConsoleState,
+}
+
+pub struct ConsoleState {
+    message_queue: VecDeque<String>,
+}
+
+impl ConsoleState {
+    pub fn add_async_message(&mut self, msg: String) {
+        self.message_queue.push_back(msg);
+    }
 }
 
 fn split_pipeline(pipeline: &str) -> Vec<&str> {
@@ -255,6 +267,10 @@ impl<'a> Console<'a> {
         }));
 
         'command_loop: loop {
+            while let Some(msg) = self.state.message_queue.pop_front() {
+                println!("{}", msg)
+            }
+
             let readline = match rl.readline(&self.prompt) {
                 Ok(o) => o,
                 Err(e) => match e {
@@ -333,7 +349,7 @@ impl<'a> Console<'a> {
                         name,
                     ),
                     Runnable::Command { cmd, args } => (
-                        cmd.execute(args, &previous_output, &mut output_buf),
+                        cmd.execute(&mut self.state, args, &previous_output, &mut output_buf),
                         cmd.get_name(),
                     ),
                 };
@@ -419,6 +435,9 @@ impl Default for Console<'_> {
         Self {
             prompt: "> ".to_string(),
             commands: HashMap::new(),
+            state: ConsoleState {
+                message_queue: VecDeque::new(),
+            },
         }
     }
 }
