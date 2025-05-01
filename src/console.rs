@@ -1,8 +1,10 @@
 use std::{
+    cell::RefCell,
     collections::{HashMap, VecDeque},
     fmt::Write as _,
     io::Write as _,
     process::Stdio,
+    rc::Rc,
 };
 
 use rustyline::{
@@ -33,22 +35,24 @@ pub enum ConsoleError {
 }
 
 #[derive(Helper, Completer, Validator, Hinter, Highlighter)]
-struct ConsoleHelper<'a> {
+struct ConsoleHelper {
     #[rustyline(Completer)]
-    completer: CommandCompleter<'a>,
+    completer: CommandCompleter,
 }
 
-struct CommandCompleter<'a> {
-    commands: &'a HashMap<String, &'a dyn Command>,
+type CommandSet = Rc<RefCell<HashMap<String, Box<dyn Command>>>>;
+
+struct CommandCompleter {
+    commands: CommandSet,
 }
 
-impl<'a> CommandCompleter<'a> {
-    fn new(commands: &'a HashMap<String, &'a dyn Command>) -> Self {
+impl CommandCompleter {
+    fn new(commands: CommandSet) -> Self {
         Self { commands }
     }
 }
 
-impl Completer for CommandCompleter<'_> {
+impl Completer for CommandCompleter {
     type Candidate = Pair;
 
     fn complete(
@@ -72,10 +76,12 @@ impl Completer for CommandCompleter<'_> {
         let is_first_word =
             subtokens.len() < 2 && !line[0..pos].contains(|o: char| o.is_whitespace());
 
+        let command_set = &self.commands.borrow();
+
         if is_first_word {
             // We are completing the name of a command
             let mut res = vec![];
-            for command in self.commands.keys() {
+            for command in self.commands.borrow().keys() {
                 if command.starts_with(line) {
                     res.push(Pair {
                         display: command.to_string(),
@@ -87,8 +93,8 @@ impl Completer for CommandCompleter<'_> {
             Ok((orig_pos.saturating_sub(line.len()), res))
         } else {
             // We are completing an argument to a command
-            let command = match self.commands.get(&subtokens[0]) {
-                Some(c) => *c,
+            let command = match command_set.get(&subtokens[0]) {
+                Some(c) => c,
                 None => return Ok((orig_pos, vec![])), // Unrecognized command
             };
 
@@ -188,14 +194,14 @@ enum Runnable<'a> {
         args: Vec<String>,
     },
     Command {
-        cmd: &'a dyn Command,
+        cmd: &'a Box<dyn Command>,
         args: clap::ArgMatches,
     },
 }
 
-pub struct Console<'a> {
+pub struct Console {
     prompt: String,
-    commands: HashMap<String, &'a dyn Command>,
+    commands: CommandSet,
 }
 
 fn split_pipeline(pipeline: &str) -> Vec<&str> {
@@ -242,7 +248,7 @@ fn split_pipeline(pipeline: &str) -> Vec<&str> {
     command_lines
 }
 
-impl<'a> Console<'a> {
+impl Console {
     pub fn cmd_loop(&mut self) -> Result<(), ConsoleError> {
         let rl_config = rustyline::Config::builder()
             .check_cursor_position(true) // Prevent overwriting of stdout
@@ -251,7 +257,7 @@ impl<'a> Console<'a> {
             .build();
         let mut rl = rustyline::Editor::with_config(rl_config)?;
         rl.set_helper(Some(ConsoleHelper {
-            completer: CommandCompleter::new(&self.commands),
+            completer: CommandCompleter::new(Rc::clone(&self.commands)),
         }));
 
         'command_loop: loop {
@@ -262,6 +268,10 @@ impl<'a> Console<'a> {
                     _ => return Err(ConsoleError::from(e)),
                 },
             };
+
+            // This needs to be borrowed here. self.commands shall not mutate
+            // for the rest of this iteration of command_loop.
+            let command_set = &self.commands.borrow();
 
             let command_lines = split_pipeline(&readline);
             let mut runnables: VecDeque<Runnable> = VecDeque::new();
@@ -296,7 +306,7 @@ impl<'a> Console<'a> {
                         name: program.to_string(),
                         args: rest.to_vec(),
                     });
-                } else if let Some(&cmd) = self.commands.get(&tokens[0]) {
+                } else if let Some(cmd) = command_set.get(&tokens[0]) {
                     let matches = match cmd.get_parser().try_get_matches_from(&tokens) {
                         Ok(matches) => matches,
                         Err(e) => {
@@ -408,17 +418,17 @@ impl<'a> Console<'a> {
         Ok(())
     }
 
-    pub fn add_command(mut self, cmd: &'a dyn Command) -> Self {
-        self.commands.insert(cmd.get_name(), cmd);
+    pub fn add_command(self, cmd: Box<dyn Command>) -> Self {
+        self.commands.borrow_mut().insert(cmd.get_name(), cmd);
         self
     }
 }
 
-impl Default for Console<'_> {
+impl Default for Console {
     fn default() -> Self {
         Self {
             prompt: "> ".to_string(),
-            commands: HashMap::new(),
+            commands: Rc::new(RefCell::new(HashMap::new())),
         }
     }
 }
