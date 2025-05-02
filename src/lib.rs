@@ -1,3 +1,4 @@
+mod completion;
 pub mod console;
 
 #[cfg(test)]

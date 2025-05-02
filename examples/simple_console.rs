@@ -115,9 +115,9 @@ impl Command for UpperCommand {
 
 fn main() {
     let mut console = Console::default()
-        .add_command(&DirCommand {})
-        .add_command(&EchoCommand {})
-        .add_command(&UpperCommand {});
+        .add_command(Box::new(DirCommand {}))
+        .add_command(Box::new(EchoCommand {}))
+        .add_command(Box::new(UpperCommand {}));
 
     if let Err(e) = console.cmd_loop() {
         eprintln!("{}", e);
