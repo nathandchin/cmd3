@@ -7,6 +7,7 @@ use std::{
     rc::Rc,
 };
 
+use colored::Colorize;
 use rustyline::{error::ReadlineError, Completer, Helper, Highlighter, Hinter, Validator};
 use thiserror::Error;
 
@@ -230,7 +231,7 @@ impl Console {
                         error = ConsoleError::BrokenPipeError(Box::new(error));
                     }
 
-                    eprintln!("{}", error);
+                    eprintln!("{}", error.to_string().red());
                     continue 'command_loop;
                 }
 
