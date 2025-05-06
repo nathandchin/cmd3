@@ -7,6 +7,7 @@ use std::{
     rc::Rc,
 };
 
+use colored::Colorize;
 use rustyline::{error::ReadlineError, Completer, Helper, Highlighter, Hinter, Validator};
 use thiserror::Error;
 
@@ -55,7 +56,7 @@ pub trait Command {
         args: clap::ArgMatches,
         stdin: &str,
         stdout: &mut dyn std::fmt::Write,
-    ) -> Result<(), String>;
+    ) -> Result<(), Box<dyn std::error::Error>>;
 }
 
 enum Runnable<'a> {
@@ -222,7 +223,7 @@ impl Console {
                 };
 
                 if let Err(error_msg) = res {
-                    let mut error = ConsoleError::CommandError(command_name, error_msg);
+                    let mut error = ConsoleError::CommandError(command_name, error_msg.to_string());
 
                     // If this is a pipeline of multiple commands, then wrap
                     // the current command's error in a pipeline error.
@@ -230,7 +231,7 @@ impl Console {
                         error = ConsoleError::BrokenPipeError(Box::new(error));
                     }
 
-                    eprintln!("{}", error);
+                    eprintln!("{}", error.to_string().red());
                     continue 'command_loop;
                 }
 
@@ -252,7 +253,7 @@ impl Console {
         args: &Vec<&str>,
         stdin: &str,
         stdout: &mut String,
-    ) -> Result<(), String> {
+    ) -> Result<(), Box<dyn std::error::Error>> {
         /*
          * There are a lot of `expect()`s here. Maybe at some point these can be
          * handled, but for now they are outside the scope of an

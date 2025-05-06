@@ -28,7 +28,7 @@ impl Command for DirCommand {
         args: clap::ArgMatches,
         stdin: &str,
         stdout: &mut dyn std::fmt::Write,
-    ) -> Result<(), String> {
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let args: DirArgs = clap::FromArgMatches::from_arg_matches(&args).unwrap();
 
         let path = if !stdin.is_empty() {
@@ -36,11 +36,11 @@ impl Command for DirCommand {
         } else if args.path.is_some() {
             &args.path.unwrap()
         } else {
-            return Err("No path provided as argument or from stdin".to_string());
+            return Err("No path provided as argument or from stdin".into());
         };
 
         if args.verbose {
-            write!(stdout, "(dir {})", path).map_err(|e| format!("IO error {}", e))?;
+            write!(stdout, "(dir {})", path)?;
         }
 
         Ok(())
@@ -74,13 +74,13 @@ impl Command for EchoCommand {
         args: clap::ArgMatches,
         _stdin: &str,
         stdout: &mut dyn std::fmt::Write,
-    ) -> Result<(), String> {
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let args: EchoArgs = clap::FromArgMatches::from_arg_matches(&args).unwrap();
 
         if args.no_newline {
-            write!(stdout, "{}", args.arg.join(" ")).map_err(|e| format!("IO error {}", e))?;
+            write!(stdout, "{}", args.arg.join(" "))?;
         } else {
-            write!(stdout, "{}\n", args.arg.join(" ")).map_err(|e| format!("IO error {}", e))?;
+            write!(stdout, "{}\n", args.arg.join(" "))?;
         }
 
         Ok(())
@@ -107,8 +107,8 @@ impl Command for UpperCommand {
         _args: clap::ArgMatches,
         stdin: &str,
         stdout: &mut dyn std::fmt::Write,
-    ) -> Result<(), String> {
-        write!(stdout, "{}", stdin.to_uppercase()).map_err(|e| format!("IO error {}", e))?;
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        write!(stdout, "{}", stdin.to_uppercase())?;
         Ok(())
     }
 }
