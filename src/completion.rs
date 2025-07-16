@@ -1,3 +1,5 @@
+use std::collections::VecDeque;
+
 use rustyline::completion::{Completer, Pair};
 
 use crate::console::CommandSet;
@@ -28,13 +30,19 @@ impl Completer for CommandCompleter {
             (line, pos)
         };
 
-        let subtokens = match shlex::split(&line[0..pos]) {
+        let mut subtokens = VecDeque::from(match shlex::split(&line[0..pos]) {
             Some(o) => o,
             None => return Ok((pos, vec![])),
-        };
+        });
 
-        let is_first_word =
-            subtokens.len() < 2 && !line[0..pos].contains(|o: char| o.is_whitespace());
+        let (is_first_word, prefix) = if subtokens.is_empty() {
+            (true, "")
+        } else {
+            (
+                subtokens.len() < 2 && !line[0..pos].contains(|o: char| o.is_whitespace()),
+                line.trim(),
+            )
+        };
 
         let command_set = &self.commands.borrow();
 
@@ -42,7 +50,7 @@ impl Completer for CommandCompleter {
             // We are completing the name of a command
             let mut res = vec![];
             for command in self.commands.borrow().keys() {
-                if command.starts_with(line) {
+                if command.starts_with(prefix) {
                     res.push(Pair {
                         display: command.to_string(),
                         replacement: command.to_string(),
@@ -53,7 +61,7 @@ impl Completer for CommandCompleter {
             Ok((orig_pos.saturating_sub(line.len()), res))
         } else {
             // We are completing an argument to a command
-            let command = match command_set.get(&subtokens[0]) {
+            let command = match command_set.get(&subtokens.pop_front().unwrap_or_default()) {
                 Some(c) => c,
                 None => return Ok((orig_pos, vec![])), // Unrecognized command
             };
@@ -71,7 +79,7 @@ impl Completer for CommandCompleter {
                 }
                 Ok((orig_pos, completions))
             } else {
-                let word = subtokens.last().unwrap();
+                let word = subtokens.pop_back().unwrap();
 
                 if word.starts_with("--") {
                     // Long form
@@ -80,7 +88,7 @@ impl Completer for CommandCompleter {
                             // Only one possibility: long form
                             let replacement = format!("--{}", long);
 
-                            if replacement.starts_with(word) {
+                            if replacement.starts_with(&word) {
                                 completions.push(Pair {
                                     display: format!("[{}]", replacement),
                                     replacement,
@@ -111,7 +119,7 @@ impl Completer for CommandCompleter {
                                 unreachable!("Arg must have at least one of long or short form");
                             };
 
-                        if replacement.starts_with(word) {
+                        if replacement.starts_with(&word) {
                             completions.push(Pair {
                                 display,
                                 replacement,
