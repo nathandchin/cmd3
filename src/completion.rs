@@ -86,11 +86,11 @@ impl Completer for CommandCompleter {
                     for arg in parser.get_opts() {
                         if let Some(long) = arg.get_long() {
                             // Only one possibility: long form
-                            let replacement = format!("--{}", long);
+                            let replacement = format!("--{long}");
 
                             if replacement.starts_with(&word) {
                                 completions.push(Pair {
-                                    display: format!("[{}]", replacement),
+                                    display: format!("[{replacement}]"),
                                     replacement,
                                 });
                             }
@@ -106,11 +106,11 @@ impl Completer for CommandCompleter {
                         // Can be any of long+short, long only, or short only
                         let (display, replacement) =
                             if let (Some(long), Some(short)) = (long, short) {
-                                (format!("[-{}, --{}]", short, long), format!("-{} ", short))
+                                (format!("[-{short}, --{long}]"), format!("-{short} "))
                             } else if let Some(long) = long {
-                                (format!("[--{}]", long), format!("--{} ", long))
+                                (format!("[--{long}]"), format!("--{long} "))
                             } else if let Some(short) = short {
-                                (format!("[-{}]", short), format!("-{} ", short))
+                                (format!("[-{short}]"), format!("-{short} "))
                             } else {
                                 // Trying to use such an arg will be a runtime
                                 // error when the parser is invoked, but it

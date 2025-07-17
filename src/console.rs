@@ -13,10 +13,9 @@ use thiserror::Error;
 
 use crate::completion::CommandCompleter;
 
+#[non_exhaustive]
 #[derive(Error, Debug)]
 pub enum ConsoleError {
-    #[error("Uncategorized")]
-    Uncategorized,
     #[error("Error with readline: {0}")]
     ReadlineError(ReadlineError),
     #[error("Error writing to stdout")]
@@ -181,7 +180,7 @@ impl Console {
                     let matches = match cmd.get_parser().try_get_matches_from(&tokens) {
                         Ok(matches) => matches,
                         Err(e) => {
-                            eprintln!("{}", e);
+                            eprintln!("{e}");
                             continue 'command_loop;
                         }
                     };
@@ -241,7 +240,7 @@ impl Console {
             /*
              * Print the output at the end of the pipeline
              */
-            print!("{}", previous_output);
+            print!("{previous_output}");
             std::io::stdout()
                 .flush()
                 .map_err(|_| ConsoleError::StdoutWriteError)?;
@@ -287,7 +286,7 @@ impl Console {
         eprint!("{}", String::from_utf8_lossy(&output.stderr));
 
         write!(stdout, "{}", String::from_utf8_lossy(&output.stdout))
-            .map_err(|e| format!("IO error {}", e))?;
+            .map_err(|e| format!("IO error {e}"))?;
 
         Ok(())
     }

@@ -1,52 +1,6 @@
 use clap::CommandFactory as _;
 use cmd3::console::{Command, Console};
 
-/// Outputs "(dir <path>)", where `path` is provided on the command line or via
-/// stdin.
-#[derive(clap::Parser, Debug)]
-struct DirArgs {
-    path: Option<String>,
-
-    /// Print output at the end
-    #[arg(short = 'v', long)]
-    verbose: bool,
-}
-
-struct DirCommand;
-
-impl Command for DirCommand {
-    fn get_name(&self) -> String {
-        "dir".to_string()
-    }
-
-    fn get_parser(&self) -> clap::Command {
-        DirArgs::command()
-    }
-
-    fn execute(
-        &self,
-        args: clap::ArgMatches,
-        stdin: &str,
-        stdout: &mut dyn std::fmt::Write,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let args: DirArgs = clap::FromArgMatches::from_arg_matches(&args).unwrap();
-
-        let path = if !stdin.is_empty() {
-            stdin
-        } else if args.path.is_some() {
-            &args.path.unwrap()
-        } else {
-            return Err("No path provided as argument or from stdin".into());
-        };
-
-        if args.verbose {
-            write!(stdout, "(dir {})", path)?;
-        }
-
-        Ok(())
-    }
-}
-
 /// Write `arg`s separated by a single space and followed by a newline.
 #[derive(clap::Parser, Debug)]
 struct EchoArgs {
@@ -80,7 +34,7 @@ impl Command for EchoCommand {
         if args.no_newline {
             write!(stdout, "{}", args.arg.join(" "))?;
         } else {
-            write!(stdout, "{}\n", args.arg.join(" "))?;
+            writeln!(stdout, "{}", args.arg.join(" "))?;
         }
 
         Ok(())
@@ -115,11 +69,10 @@ impl Command for UpperCommand {
 
 fn main() {
     let mut console = Console::default()
-        .add_command(Box::new(DirCommand {}))
         .add_command(Box::new(EchoCommand {}))
         .add_command(Box::new(UpperCommand {}));
 
     if let Err(e) = console.cmd_loop() {
-        eprintln!("{}", e);
+        eprintln!("{e}");
     }
 }
